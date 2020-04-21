@@ -1,0 +1,101 @@
+import pandas as pd
+import numpy as np
+from pandas_datareader import data as wb
+
+
+## Stock ticker URLs
+
+# NYSE
+url_nyse = "https://old.nasdaq.com/screening/companies-by-name.aspx?letter=0&exchange=nyse&render=download"
+# Nasdaq
+url_nasdaq = "https://old.nasdaq.com/screening/companies-by-name.aspx?letter=0&exchange=nasdaq&render=download"
+# AMEX
+url_amex = "https://old.nasdaq.com/screening/companies-by-name.aspx?letter=0&exchange=amex&render=download"
+
+col_list = ["Symbol", "Name","LastSale","MarketCap","IPOyear","Sector","Summary Quote"]
+df1 = pd.read_csv(url_nyse, usecols=col_list)
+df2 = pd.read_csv(url_nasdaq, usecols=col_list)
+df = df1.merge(df2, on='Symbol', how='outer')
+
+stocks = df['Symbol'].tolist()
+
+
+
+from bs4 import BeautifulSoup as bs
+import requests
+
+def get_fundemental_data(df):
+
+    for symbol in df.index:
+        try:
+            url = ('http://finviz.com/quote.ashx?t=' + symbol.lower())
+            soup = bs(requests.get(url).content, features="lxml")
+            for m in df.columns:
+                df.loc[symbol,m] = fundemental_metric(soup,m)
+        except Exception as e:
+            print(symbol, 'not found')
+    return df
+
+def fundemental_metric(soup, metric):
+
+    return soup.find(text = metric).find_next(class_ = 'snapshot-td2').text
+
+metric = ['P/B',
+          'P/E',
+          'Market Cap',
+          'Current Ratio',
+          'Forward P/E',
+          'PEG',
+          'Debt/Eq',
+          'EPS (ttm)',
+          'Dividend %',
+          'ROE',
+          'ROI',
+          'EPS Q/Q',
+          'Insider Own'
+          ]
+
+df = pd.DataFrame(index=stocks,columns=metric)
+df = get_fundemental_data(df)
+
+# Clean up the data
+# Some metrics have 'B' or 'M' at the end to indicate billions or millions of $
+# Convert all those values to floats measured in billions of $
+df.loc[df['Market Cap'].str.strip().str[-1] == 'M', 'Market Cap'] = df['Market Cap'].str.strip().str[:-1].astype(float) / 1000
+df.loc[df['Market Cap'].str.strip().str[-1] == 'B', 'Market Cap'] = df['Market Cap'].str.strip().str[:-1].astype(float)
+
+# Replace '-' values with NaN
+df['P/B'] = df['P/B'].replace('-',np.NaN)
+df['P/E'] = df['P/E'].replace('-',np.NaN)
+df['Current Ratio'] = df['Current Ratio'].replace('-',np.NaN)
+df['Forward P/E'] = df['Forward P/E'].replace('-',np.NaN)
+df['PEG'] = df['PEG'].replace('-',np.NaN)
+df['Dividend %'] = df['Dividend %'].replace('-',np.NaN)
+df['ROE'] = df['ROE'].replace('-',np.NaN)
+df['Insider Own'] = df['Insider Own'].replace('-',np.NaN)
+
+# INTELLIGENT INVESTOR CRITERIA #
+
+# Businesses which are "adequately sized" (i.e. market cap of >$2 billion)
+df = df[(df['Market Cap'].astype(float) > 2)]
+
+# Businesses with a 'strong financial condition' (i.e. current ratio > 2:1)
+df = df[(df['Current Ratio'].astype(float) >= 2)]
+
+# Price of stock no more than 1.5 times net asset value. Price-to-book ratio is less than 1.5
+df = df[(df['P/B'].astype(float) <= 1.5)]
+
+# Business has demonstrated earning power (i.e. EPS Q/Q > 10%)
+df['EPS Q/Q'] = df['EPS Q/Q'].map(lambda x: x[:-1])
+df = df[df['EPS Q/Q'].astype(float) > 10]
+
+# Business earnw good returns on equity while employing little or no debt (i.e. Debt/Equity < 1 & ROE > 10%)
+df['ROE'] = df['ROE'].map(lambda x: x[:-1])
+df = df[(df['Debt/Eq'].astype(float) < 1) & (df['ROE'].astype(float) > 10)]
+
+# Management having substantial ownership in the business (i.e. Insider ownership > 10%)
+df['Insider Own'] = df['Insider Own'].map(lambda x: x[:-1])
+df = df[df['Insider Own'].astype(float) > 30]
+
+# Export data to blank excel file
+df.to_excel(r'INSERT FILE PATH HERE/FILE NAME.xlsx', index = False)
